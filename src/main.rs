@@ -84,6 +84,9 @@ enum Commands {
 
         #[arg(long)]
         model_path: Option<String>,
+
+        #[arg(long, default_value = "smollm")]
+        chat_template: String,
     },
 
     AskStream {
@@ -110,6 +113,9 @@ enum Commands {
 
         #[arg(long)]
         model_path: Option<String>,
+
+        #[arg(long, default_value = "smollm")]
+        chat_template: String,
     },
 
     Bench {
@@ -199,6 +205,7 @@ async fn main() -> Result<()> {
             top_p,
             tokenizer_path,
             model_path,
+            chat_template,
         } => {
             let mut engine = InferenceEngine::new_with_backend(
                 &tokenizer_path,
@@ -206,7 +213,9 @@ async fn main() -> Result<()> {
                 model_path.as_deref(),
             )?;
 
-            let chat_prompt = InferenceEngine::format_chat_prompt(&prompt);
+            let chat_prompt =
+                InferenceEngine::format_chat_prompt_with_template(&prompt, &chat_template);
+
             let sampling = SamplingConfig::new(temperature, Some(top_k), top_p);
 
             println!("User: {}", prompt);
@@ -227,6 +236,7 @@ async fn main() -> Result<()> {
             top_p,
             tokenizer_path,
             model_path,
+            chat_template,
         } => {
             let mut engine = InferenceEngine::new_with_backend(
                 &tokenizer_path,
@@ -234,7 +244,9 @@ async fn main() -> Result<()> {
                 model_path.as_deref(),
             )?;
 
-            let chat_prompt = InferenceEngine::format_chat_prompt(&prompt);
+            let chat_prompt =
+                InferenceEngine::format_chat_prompt_with_template(&prompt, &chat_template);
+
             let sampling = SamplingConfig::new(temperature, Some(top_k), top_p);
 
             println!("User: {}", prompt);

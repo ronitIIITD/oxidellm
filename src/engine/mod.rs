@@ -1,20 +1,20 @@
 pub mod cache;
+pub mod candle_backend;
+pub mod gguf;
 pub mod metrics;
 pub mod model;
 pub mod sampler;
 pub mod tokenizer;
-pub mod candle_backend;
-pub mod gguf;
 
 use anyhow::Result;
+use std::time::Instant;
 
 use cache::KvCache;
+use candle_backend::CandleModel;
 use metrics::GenerationMetrics;
 use model::{FakeModel, ModelBackend};
-use candle_backend::CandleModel;
 use sampler::{Sampler, SamplingConfig};
 use tokenizer::RealTokenizer;
-use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub enum BackendKind {
@@ -66,10 +66,21 @@ impl InferenceEngine {
     }
 
     pub fn format_chat_prompt(user_message: &str) -> String {
-        format!(
-            "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-            user_message
-        )
+        Self::format_chat_prompt_with_template(user_message, "smollm")
+    }
+
+    pub fn format_chat_prompt_with_template(user_message: &str, template: &str) -> String {
+        match template {
+            "llama3" => format!(
+                "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a helpful AI assistant. Answer the user's question directly and concisely.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+                user_message
+            ),
+
+            "smollm" | _ => format!(
+                "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face. Answer the user's question directly and concisely.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                user_message
+            ),
+        }
     }
 
     pub fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<GenerationResult> {
@@ -127,23 +138,7 @@ impl InferenceEngine {
         let generated_tokens = &tokens[prompt_len..];
         let mut text = self.tokenizer.decode(generated_tokens)?;
 
-        let stop_strings = [
-            "<|endoftext|>",
-            "<|im_end|>",
-            "</s>",
-            "<eos>",
-            "<|im_start|>",
-            "\nUser:",
-            "\nuser:",
-            "\nQuestion:",
-            "\nOptions:",
-        ];
-
-        for stop in stop_strings {
-            if let Some(index) = text.find(stop) {
-                text.truncate(index);
-            }
-        }
+        Self::clean_stop_strings(&mut text);
 
         let completion_tokens = generated_tokens.len();
         let total_tokens = tokens.len();
@@ -209,29 +204,9 @@ impl InferenceEngine {
             }
 
             let piece = self.tokenizer.decode(&[next_token])?;
-
-            let stop_strings = [
-                "<|endoftext|>",
-                "<|im_end|>",
-                "</s>",
-                "<eos>",
-                "<|im_start|>",
-                "\nUser:",
-                "\nuser:",
-                "\nQuestion:",
-                "\nOptions:",
-            ];
-
-            let mut should_stop = false;
             let mut clean_piece = piece.clone();
 
-            for stop in stop_strings {
-                if let Some(index) = clean_piece.find(stop) {
-                    clean_piece.truncate(index);
-                    should_stop = true;
-                    break;
-                }
-            }
+            let should_stop = Self::clean_stop_strings(&mut clean_piece);
 
             if !clean_piece.is_empty() {
                 on_token(&clean_piece);
@@ -256,5 +231,32 @@ impl InferenceEngine {
             total_tokens,
             model_name: self.model.name().to_string(),
         })
+    }
+
+    fn clean_stop_strings(text: &mut String) -> bool {
+        let stop_strings = [
+            "<|endoftext|>",
+            "<|im_end|>",
+            "</s>",
+            "<eos>",
+            "<|im_start|>",
+            "<|eot_id|>",
+            "<|start_header_id|>",
+            "<|end_header_id|>",
+            "<|begin_of_text|>",
+            "\nUser:",
+            "\nuser:",
+            "\nQuestion:",
+            "\nOptions:",
+        ];
+
+        for stop in stop_strings {
+            if let Some(index) = text.find(stop) {
+                text.truncate(index);
+                return true;
+            }
+        }
+
+        false
     }
 }
