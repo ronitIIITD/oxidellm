@@ -87,6 +87,9 @@ enum Commands {
 
         #[arg(long, default_value = "smollm")]
         chat_template: String,
+
+        #[arg(long)]
+        max_context_tokens: Option<usize>,
     },
 
     AskStream {
@@ -116,6 +119,9 @@ enum Commands {
 
         #[arg(long, default_value = "smollm")]
         chat_template: String,
+
+        #[arg(long)]
+        max_context_tokens: Option<usize>,
     },
 
     Bench {
@@ -206,6 +212,7 @@ async fn main() -> Result<()> {
             tokenizer_path,
             model_path,
             chat_template,
+            max_context_tokens,
         } => {
             let mut engine = InferenceEngine::new_with_backend(
                 &tokenizer_path,
@@ -215,6 +222,8 @@ async fn main() -> Result<()> {
 
             let chat_prompt =
                 InferenceEngine::format_chat_prompt_with_template(&prompt, &chat_template);
+            
+            engine.ensure_context_limit(&chat_prompt, max_context_tokens)?;
 
             let sampling = SamplingConfig::new(temperature, Some(top_k), top_p);
 
@@ -237,6 +246,7 @@ async fn main() -> Result<()> {
             tokenizer_path,
             model_path,
             chat_template,
+            max_context_tokens,
         } => {
             let mut engine = InferenceEngine::new_with_backend(
                 &tokenizer_path,
@@ -247,6 +257,8 @@ async fn main() -> Result<()> {
             let chat_prompt =
                 InferenceEngine::format_chat_prompt_with_template(&prompt, &chat_template);
 
+            engine.ensure_context_limit(&chat_prompt, max_context_tokens)?;
+            
             let sampling = SamplingConfig::new(temperature, Some(top_k), top_p);
 
             println!("User: {}", prompt);

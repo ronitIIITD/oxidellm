@@ -3,7 +3,7 @@ use candle_core::{quantized::gguf_file, Device, Tensor};
 use candle_transformers::models::quantized_llama::ModelWeights;
 use std::{fs::File, path::PathBuf};
 
-use super::model::ModelBackend;
+use super::model::{BackendCacheInfo, ModelBackend};
 
 pub struct CandleModel {
     vocab_size: usize,
@@ -73,6 +73,14 @@ impl ModelBackend for CandleModel {
 
     fn reset(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    fn cache_info(&self) -> BackendCacheInfo {
+        BackendCacheInfo {
+            supports_kv_cache: true,
+            cache_owner: "candle-internal",
+            cache_description: "OxideLLM uses prefill/decode positions while Candle owns the internal transformer KV-cache tensors.",
+        }
     }
 
     fn name(&self) -> &'static str {

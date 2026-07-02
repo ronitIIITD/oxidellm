@@ -1,5 +1,12 @@
 use anyhow::Result;
 
+#[derive(Clone, Debug)]
+pub struct BackendCacheInfo {
+    pub supports_kv_cache: bool,
+    pub cache_owner: &'static str,
+    pub cache_description: &'static str,
+}
+
 pub trait ModelBackend: Send {
     fn vocab_size(&self) -> usize;
 
@@ -7,6 +14,14 @@ pub trait ModelBackend: Send {
 
     fn reset(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    fn cache_info(&self) -> BackendCacheInfo {
+        BackendCacheInfo {
+            supports_kv_cache: false,
+            cache_owner: "none",
+            cache_description: "This backend does not expose KV-cache behavior.",
+        }
     }
 
     fn name(&self) -> &'static str;
@@ -40,6 +55,14 @@ impl ModelBackend for FakeModel {
 
     fn reset(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    fn cache_info(&self) -> BackendCacheInfo {
+        BackendCacheInfo {
+            supports_kv_cache: false,
+            cache_owner: "fake-backend",
+            cache_description: "Fake backend has no real transformer KV-cache.",
+        }
     }
 
     fn name(&self) -> &'static str {
