@@ -9,6 +9,10 @@ models/*.bin
 models/*.pt
 models/*.pth
 
+# Downloaded model/tokenizer files
+models/llama3.2-*.json
+models/qwen*.json
+
 # Local test files
 body.json
 *.log
