@@ -2,6 +2,7 @@ pub mod cache;
 pub mod candle_backend;
 pub mod gguf;
 pub mod metrics;
+pub mod rag;
 pub mod model;
 pub mod sampler;
 pub mod tokenizer;

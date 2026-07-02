@@ -75,7 +75,7 @@ pub struct ChatCompletionRequest {
     pub return_debug: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -123,6 +123,142 @@ pub struct AssistantMessage {
 #[derive(Serialize)]
 struct StreamToken {
     token: String,
+}
+
+#[derive(Deserialize)]
+pub struct RagCompletionRequest {
+    pub question: String,
+
+    #[serde(default)]
+    pub index: Option<String>,
+
+    #[serde(default)]
+    pub top_chunks: Option<usize>,
+
+    pub max_tokens: Option<usize>,
+
+    #[serde(default)]
+    pub temperature: Option<f32>,
+
+    #[serde(default)]
+    pub top_k: Option<usize>,
+
+    #[serde(default)]
+    pub top_p: Option<f32>,
+
+    #[serde(default)]
+    pub chat_template: Option<String>,
+
+    #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+
+    #[serde(default)]
+    pub return_context: Option<bool>,
+
+    #[serde(default)]
+    pub return_debug: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct RagChatCompletionRequest {
+    pub messages: Vec<ChatMessage>,
+
+    #[serde(default)]
+    pub index: Option<String>,
+
+    #[serde(default)]
+    pub top_chunks: Option<usize>,
+
+    pub max_tokens: Option<usize>,
+
+    #[serde(default)]
+    pub temperature: Option<f32>,
+
+    #[serde(default)]
+    pub top_k: Option<usize>,
+
+    #[serde(default)]
+    pub top_p: Option<f32>,
+
+    #[serde(default)]
+    pub chat_template: Option<String>,
+
+    #[serde(default)]
+    pub max_context_tokens: Option<usize>,
+
+    #[serde(default)]
+    pub auto_truncate: Option<bool>,
+
+    #[serde(default)]
+    pub return_context: Option<bool>,
+
+    #[serde(default)]
+    pub return_debug_prompt: Option<bool>,
+
+    #[serde(default)]
+    pub return_debug: Option<bool>,
+}
+
+#[derive(Serialize)]
+pub struct RagCompletionResponse {
+    pub answer: String,
+    pub sources: Vec<RagSource>,
+    pub usage: Option<Usage>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<RagDebugInfo>,
+}
+
+#[derive(Serialize)]
+pub struct RagChatCompletionResponse {
+    pub id: String,
+    pub object: String,
+    pub model: String,
+    pub choices: Vec<ChatChoice>,
+    pub sources: Vec<RagSource>,
+    pub usage: Option<Usage>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug_prompt: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<RagChatDebugInfo>,
+}
+
+#[derive(Serialize)]
+pub struct RagSource {
+    pub source: String,
+    pub chunk_index: usize,
+    pub score: f32,
+}
+
+#[derive(Serialize)]
+pub struct RagDebugInfo {
+    pub index_path: String,
+    pub retrieved_chunks: usize,
+    pub prompt_tokens: usize,
+    pub max_context_tokens: Option<usize>,
+    pub chat_template: String,
+}
+
+#[derive(Serialize)]
+pub struct RagChatDebugInfo {
+    pub index_path: String,
+    pub retrieval_query: String,
+    pub retrieved_chunks: usize,
+    pub prompt_tokens: usize,
+    pub max_context_tokens: Option<usize>,
+    pub messages_before_truncation: usize,
+    pub messages_after_truncation: usize,
+    pub auto_truncate_requested: bool,
+    pub auto_truncated: bool,
+    pub chat_template: String,
 }
 
 async fn health() -> &'static str {
@@ -199,6 +335,39 @@ fn generation_error_response(err: impl std::fmt::Display) -> ChatCompletionRespo
         debug_prompt: None,
         debug: None,
     }
+}
+
+fn rag_chat_error_response(
+    message: String,
+    sources: Vec<RagSource>,
+    context: Option<String>,
+) -> RagChatCompletionResponse {
+    RagChatCompletionResponse {
+        id: "chatcmpl-oxidellm-rag-local".to_string(),
+        object: "chat.completion".to_string(),
+        model: "oxidellm-error".to_string(),
+        choices: vec![ChatChoice {
+            index: 0,
+            message: AssistantMessage {
+                role: "assistant".to_string(),
+                content: message,
+            },
+            finish_reason: "error".to_string(),
+        }],
+        sources,
+        usage: None,
+        context,
+        debug_prompt: None,
+        debug: None,
+    }
+}
+
+fn latest_user_message(messages: &[ChatMessage]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role.eq_ignore_ascii_case("user"))
+        .map(|message| message.content.clone())
 }
 
 async fn chat_completions(
@@ -436,6 +605,363 @@ async fn chat_completions_stream(
     Sse::new(ReceiverStream::new(rx))
 }
 
+async fn rag_completions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RagCompletionRequest>,
+) -> Json<RagCompletionResponse> {
+    let index_path = req
+        .index
+        .clone()
+        .unwrap_or_else(|| "rag/index.json".to_string());
+
+    let top_chunks = req.top_chunks.unwrap_or(4);
+    let max_tokens = req.max_tokens.unwrap_or(128);
+    let chat_template = req.chat_template.as_deref().unwrap_or("smollm");
+    let return_context = req.return_context.unwrap_or(false);
+    let return_debug = req.return_debug.unwrap_or(false);
+
+    let rag_index = match crate::engine::rag::load_index(&index_path) {
+        Ok(index) => index,
+        Err(err) => {
+            return Json(RagCompletionResponse {
+                answer: format!("RAG index error: {}", err),
+                sources: Vec::new(),
+                usage: None,
+                context: None,
+                debug: None,
+            });
+        }
+    };
+
+    let retrieved = crate::engine::rag::retrieve(
+        &rag_index,
+        &req.question,
+        top_chunks,
+    );
+
+    if retrieved.is_empty() {
+        return Json(RagCompletionResponse {
+            answer: "I don't know from the provided context.".to_string(),
+            sources: Vec::new(),
+            usage: None,
+            context: None,
+            debug: None,
+        });
+    }
+
+    let context = crate::engine::rag::format_retrieved_context(&retrieved);
+
+    let sources: Vec<RagSource> = retrieved
+        .iter()
+        .map(|scored| RagSource {
+            source: scored.chunk.source.clone(),
+            chunk_index: scored.chunk.chunk_index,
+            score: scored.score,
+        })
+        .collect();
+
+    let rag_user_prompt = format!(
+        "Answer the question using only the provided context.\n\
+If the answer is not present in the context, say: I don't know from the provided context.\n\n\
+Context:\n{}\n\
+Question:\n{}\n\n\
+Answer:",
+        context,
+        req.question
+    );
+
+    let prompt = InferenceEngine::format_chat_prompt_with_template(
+        &rag_user_prompt,
+        chat_template,
+    );
+
+    let sampling = SamplingConfig::new(
+        req.temperature.unwrap_or(0.3),
+        Some(req.top_k.unwrap_or(40)),
+        req.top_p.unwrap_or(0.9),
+    );
+
+    let mut engine = state.engine.lock().await;
+
+    if let Err(err) = engine.ensure_context_limit(&prompt, req.max_context_tokens) {
+        return Json(RagCompletionResponse {
+            answer: format!("Context error: {}", err),
+            sources,
+            usage: None,
+            context: if return_context { Some(context) } else { None },
+            debug: None,
+        });
+    }
+
+    let prompt_tokens = match engine.count_tokens(&prompt) {
+        Ok(count) => count,
+        Err(err) => {
+            return Json(RagCompletionResponse {
+                answer: format!("Token count error: {}", err),
+                sources,
+                usage: None,
+                context: if return_context { Some(context) } else { None },
+                debug: None,
+            });
+        }
+    };
+
+    let result = match engine.generate_with_sampling(&prompt, max_tokens, sampling) {
+        Ok(result) => result,
+        Err(err) => {
+            return Json(RagCompletionResponse {
+                answer: format!("Generation error: {}", err),
+                sources,
+                usage: None,
+                context: if return_context { Some(context) } else { None },
+                debug: None,
+            });
+        }
+    };
+
+    Json(RagCompletionResponse {
+        answer: result.text.trim().to_string(),
+        sources,
+        usage: Some(Usage {
+            prompt_tokens: result.prompt_tokens,
+            completion_tokens: result.completion_tokens,
+            total_tokens: result.total_tokens,
+        }),
+        context: if return_context { Some(context) } else { None },
+        debug: if return_debug {
+            Some(RagDebugInfo {
+                index_path,
+                retrieved_chunks: retrieved.len(),
+                prompt_tokens,
+                max_context_tokens: req.max_context_tokens,
+                chat_template: chat_template.to_string(),
+            })
+        } else {
+            None
+        },
+    })
+}
+
+async fn rag_chat_completions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RagChatCompletionRequest>,
+) -> Json<RagChatCompletionResponse> {
+    let index_path = req
+        .index
+        .clone()
+        .unwrap_or_else(|| "rag/index.json".to_string());
+
+    let top_chunks = req.top_chunks.unwrap_or(4);
+    let max_tokens = req.max_tokens.unwrap_or(128);
+    let chat_template = req.chat_template.as_deref().unwrap_or("smollm");
+    let auto_truncate = req.auto_truncate.unwrap_or(false);
+    let return_context = req.return_context.unwrap_or(false);
+    let return_debug_prompt = req.return_debug_prompt.unwrap_or(false);
+    let return_debug = req.return_debug.unwrap_or(false);
+
+    let retrieval_query = match latest_user_message(&req.messages) {
+        Some(message) => message,
+        None => {
+            return Json(rag_chat_error_response(
+                "RAG chat error: no user message found.".to_string(),
+                Vec::new(),
+                None,
+            ));
+        }
+    };
+
+    let rag_index = match crate::engine::rag::load_index(&index_path) {
+        Ok(index) => index,
+        Err(err) => {
+            return Json(rag_chat_error_response(
+                format!("RAG index error: {}", err),
+                Vec::new(),
+                None,
+            ));
+        }
+    };
+
+    let retrieved = crate::engine::rag::retrieve(
+        &rag_index,
+        &retrieval_query,
+        top_chunks,
+    );
+
+    if retrieved.is_empty() {
+        return Json(RagChatCompletionResponse {
+            id: "chatcmpl-oxidellm-rag-local".to_string(),
+            object: "chat.completion".to_string(),
+            model: "oxidellm-rag".to_string(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: AssistantMessage {
+                    role: "assistant".to_string(),
+                    content: "I don't know from the provided context.".to_string(),
+                },
+                finish_reason: "stop".to_string(),
+            }],
+            sources: Vec::new(),
+            usage: None,
+            context: None,
+            debug_prompt: None,
+            debug: None,
+        });
+    }
+
+    let context = crate::engine::rag::format_retrieved_context(&retrieved);
+
+    let sources: Vec<RagSource> = retrieved
+        .iter()
+        .map(|scored| RagSource {
+            source: scored.chunk.source.clone(),
+            chunk_index: scored.chunk.chunk_index,
+            score: scored.score,
+        })
+        .collect();
+
+    let system_rag_message = format!(
+        "You are a retrieval-augmented assistant. Answer using only the provided context.\n\
+If the answer is not present in the context, say: I don't know from the provided context.\n\n\
+Retrieved context:\n{}",
+        context
+    );
+
+    let mut messages: Vec<(String, String)> = Vec::new();
+
+    messages.push(("system".to_string(), system_rag_message));
+
+    for message in &req.messages {
+        if message.role.eq_ignore_ascii_case("system") {
+            let merged_system = format!(
+                "Additional system instruction from the user/application:\n{}",
+                message.content
+            );
+            messages.push(("system".to_string(), merged_system));
+        } else {
+            messages.push((message.role.clone(), message.content.clone()));
+        }
+    }
+
+    let messages_before_truncation = messages.len();
+    let mut auto_truncated = false;
+
+    let sampling = SamplingConfig::new(
+        req.temperature.unwrap_or(0.3),
+        Some(req.top_k.unwrap_or(40)),
+        req.top_p.unwrap_or(0.9),
+    );
+
+    let mut engine = state.engine.lock().await;
+
+    if let Some(max_context_tokens) = req.max_context_tokens {
+        if auto_truncate {
+            match engine.truncate_messages_to_context(
+                &messages,
+                chat_template,
+                max_context_tokens,
+            ) {
+                Ok(truncated_messages) => {
+                    auto_truncated = truncated_messages.len() < messages.len();
+                    messages = truncated_messages;
+                }
+                Err(err) => {
+                    return Json(rag_chat_error_response(
+                        format!("Context error: {}", err),
+                        sources,
+                        if return_context { Some(context) } else { None },
+                    ));
+                }
+            }
+        }
+
+        let prompt_check = InferenceEngine::format_messages_with_template(
+            &messages,
+            chat_template,
+        );
+
+        if let Err(err) = engine.ensure_context_limit(&prompt_check, Some(max_context_tokens)) {
+            return Json(rag_chat_error_response(
+                format!("Context error: {}", err),
+                sources,
+                if return_context { Some(context) } else { None },
+            ));
+        }
+    }
+
+    let prompt = InferenceEngine::format_messages_with_template(
+        &messages,
+        chat_template,
+    );
+
+    let prompt_tokens = match engine.count_tokens(&prompt) {
+        Ok(count) => count,
+        Err(err) => {
+            return Json(rag_chat_error_response(
+                format!("Token count error: {}", err),
+                sources,
+                if return_context { Some(context) } else { None },
+            ));
+        }
+    };
+
+    let debug_prompt = if return_debug_prompt {
+        Some(prompt.clone())
+    } else {
+        None
+    };
+
+    let debug = if return_debug {
+        Some(RagChatDebugInfo {
+            index_path,
+            retrieval_query: retrieval_query.clone(),
+            retrieved_chunks: retrieved.len(),
+            prompt_tokens,
+            max_context_tokens: req.max_context_tokens,
+            messages_before_truncation,
+            messages_after_truncation: messages.len(),
+            auto_truncate_requested: auto_truncate,
+            auto_truncated,
+            chat_template: chat_template.to_string(),
+        })
+    } else {
+        None
+    };
+
+    let result = match engine.generate_with_sampling(&prompt, max_tokens, sampling) {
+        Ok(result) => result,
+        Err(err) => {
+            return Json(rag_chat_error_response(
+                format!("Generation error: {}", err),
+                sources,
+                if return_context { Some(context) } else { None },
+            ));
+        }
+    };
+
+    Json(RagChatCompletionResponse {
+        id: "chatcmpl-oxidellm-rag-local".to_string(),
+        object: "chat.completion".to_string(),
+        model: result.model_name.clone(),
+        choices: vec![ChatChoice {
+            index: 0,
+            message: AssistantMessage {
+                role: "assistant".to_string(),
+                content: result.text.trim().to_string(),
+            },
+            finish_reason: "length".to_string(),
+        }],
+        sources,
+        usage: Some(Usage {
+            prompt_tokens: result.prompt_tokens,
+            completion_tokens: result.completion_tokens,
+            total_tokens: result.total_tokens,
+        }),
+        context: if return_context { Some(context) } else { None },
+        debug_prompt,
+        debug,
+    })
+}
+
 pub async fn run(
     port: u16,
     backend: BackendKind,
@@ -457,6 +983,8 @@ pub async fn run(
         .route("/v1/completions", post(completions))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/chat/completions/stream", post(chat_completions_stream))
+        .route("/v1/rag/completions", post(rag_completions))
+        .route("/v1/rag/chat/completions", post(rag_chat_completions))
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -468,6 +996,11 @@ pub async fn run(
     println!("Chat endpoint: POST http://{}/v1/chat/completions", addr);
     println!(
         "Chat stream endpoint: POST http://{}/v1/chat/completions/stream",
+        addr
+    );
+    println!("RAG endpoint: POST http://{}/v1/rag/completions", addr);
+    println!(
+        "RAG chat endpoint: POST http://{}/v1/rag/chat/completions",
         addr
     );
 

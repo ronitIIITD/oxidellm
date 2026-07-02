@@ -1,0 +1,5 @@
+OxideLLM is a Rust-native local LLM inference engine.
+
+It supports GGUF model loading through Candle, tokenization, sampling, streaming responses, chat templates, context window checks, auto-truncation and debug metadata.
+
+The project is designed to run local language models from the command line and through an HTTP API.

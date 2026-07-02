@@ -1,0 +1,12 @@
+{
+  "chunk_size_words": 220,
+  "chunk_overlap_words": 40,
+  "chunks": [
+    {
+      "id": 0,
+      "source": "rag\\documents\\oxidellm.txt",
+      "chunk_index": 0,
+      "text": "OxideLLM is a Rust-native local LLM inference engine. It supports GGUF model loading through Candle, tokenization, sampling, streaming responses, chat templates, context window checks, auto-truncation and debug metadata. The project is designed to run local language models from the command line and through an HTTP API."
+    }
+  ]
+}
