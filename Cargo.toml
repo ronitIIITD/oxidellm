@@ -1,0 +1,24 @@
+[package]
+name = "oxidellm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.103"
+axum = "0.8.9"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
+clap = { version = "4.6.1", features = ["derive"] }
+hf-hub = "0.5.0"
+rand = "0.10.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokenizers = "0.23.1"
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-stream = "0.1.18"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+
+[dev-dependencies]
+criterion = "0.8.2"

@@ -1,0 +1,23 @@
+# Rust build output
+target/
+
+# Large model files
+*.gguf
+models/*.gguf
+models/*.safetensors
+models/*.bin
+models/*.pt
+models/*.pth
+
+# Local test files
+body.json
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env files
+.env

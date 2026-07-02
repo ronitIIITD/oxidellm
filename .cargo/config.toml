@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "R:\\msys64\\ucrt64\\bin\\gcc.exe"
+ar = "R:\\msys64\\ucrt64\\bin\\ar.exe"
